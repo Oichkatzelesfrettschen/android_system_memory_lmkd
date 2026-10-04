@@ -1870,22 +1870,18 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
         if (sscanf(line, "Node %d, zone %" STRINGIFY(LINE_MAX) "s", &node_id, zone_name) == 2) {
             if (!node || node->id != node_id) {
                 /*
-                 * per-node stats are only present in the first non-empty zone of
-                 * the node, on a kernel new enough to emit them at all (Linux
-                 * zoneinfo_show() added the "  per-node stats" section well after
-                 * this 3.4-class ARM kernel's mm/vmstat.c was written). Peek
-                 * non-destructively: if the marker is absent, rewind save_ptr so
-                 * the peeked line -- this zone's own first field, not a node
-                 * stats header -- is not dropped. Losing it left `node` NULL
-                 * through the rest of the file and zoneinfo_parse() failing
-                 * every time on every zone.
+                 * Per-node stats follow the first non-empty zone of a node on
+                 * kernels whose zoneinfo_show() prints them; older kernels go
+                 * straight to the zone's own fields. The marker is compared in
+                 * place, because strtok_r() ends each token it returns by
+                 * overwriting the delimiter, and a consumed zone line would
+                 * leave zoneinfo_parse_zone() an end-of-buffer.
                  */
-                char *save_ptr_before_peek = save_ptr;
-                line = strtok_r(NULL, "\n", &save_ptr);
-                bool has_node_stats = line != NULL &&
-                    strncmp(line, NODE_STATS_MARKER, strlen(NODE_STATS_MARKER)) == 0;
-                if (!has_node_stats) {
-                    save_ptr = save_ptr_before_peek;
+                bool has_node_stats = save_ptr != NULL &&
+                    strncmp(save_ptr + strspn(save_ptr, "\n"), NODE_STATS_MARKER,
+                            strlen(NODE_STATS_MARKER)) == 0;
+                if (has_node_stats) {
+                    line = strtok_r(NULL, "\n", &save_ptr);
                 }
 
                 /* new node is found */
