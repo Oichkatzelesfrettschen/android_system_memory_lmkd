@@ -1758,9 +1758,13 @@ static int zoneinfo_parse_zone(char **buf, struct zoneinfo_zone *zone) {
         int64_t val;
         int field_idx;
         enum field_match_result match_res;
+        char line_copy[LINE_MAX + 1];
+
+        strlcpy(line_copy, line, sizeof(line_copy));
 
         cp = strtok_r(line, " ", &save_ptr);
         if (!cp) {
+            ALOGE("zoneinfo_parse_zone: empty tokenizable line \"%s\"", line_copy);
             return false;
         }
 
@@ -1788,6 +1792,8 @@ static int zoneinfo_parse_zone(char **buf, struct zoneinfo_zone *zone) {
         match_res = match_field(cp, ap, zoneinfo_zone_field_names, ZI_ZONE_FIELD_COUNT,
             &val, &field_idx);
         if (match_res == PARSE_FAIL) {
+            ALOGE("zoneinfo_parse_zone: field \"%s\" value \"%s\" not numeric, line \"%s\"",
+                cp, ap, line_copy);
             return false;
         }
         if (match_res == PARSE_SUCCESS) {
@@ -1863,13 +1869,19 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
         int node_id;
         if (sscanf(line, "Node %d, zone %" STRINGIFY(LINE_MAX) "s", &node_id, zone_name) == 2) {
             if (!node || node->id != node_id) {
-                line = strtok_r(NULL, "\n", &save_ptr);
-                if (strncmp(line, NODE_STATS_MARKER, strlen(NODE_STATS_MARKER)) != 0) {
-                    /*
-                     * per-node stats are only present in the first non-empty zone of
-                     * the node.
-                     */
-                    continue;
+                /*
+                 * Per-node stats follow the first non-empty zone of a node on
+                 * kernels whose zoneinfo_show() prints them; older kernels go
+                 * straight to the zone's own fields. The marker is compared in
+                 * place, because strtok_r() ends each token it returns by
+                 * overwriting the delimiter, and a consumed zone line would
+                 * leave zoneinfo_parse_zone() an end-of-buffer.
+                 */
+                bool has_node_stats = save_ptr != NULL &&
+                    strncmp(save_ptr + strspn(save_ptr, "\n"), NODE_STATS_MARKER,
+                            strlen(NODE_STATS_MARKER)) == 0;
+                if (has_node_stats) {
+                    line = strtok_r(NULL, "\n", &save_ptr);
                 }
 
                 /* new node is found */
@@ -1878,15 +1890,17 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
                     node_idx++;
                     if (node_idx == MAX_NR_NODES) {
                         /* max node count exceeded */
-                        ALOGE("%s parse error", file_data.filename);
+                        ALOGE("%s parse error: node count exceeds MAX_NR_NODES=%d at node %d",
+                            file_data.filename, MAX_NR_NODES, node_id);
                         return -1;
                     }
                 }
                 node = &zi->nodes[node_idx];
                 node->id = node_id;
                 zone_idx = 0;
-                if (!zoneinfo_parse_node(&save_ptr, node)) {
-                    ALOGE("%s parse error", file_data.filename);
+                if (has_node_stats && !zoneinfo_parse_node(&save_ptr, node)) {
+                    ALOGE("%s parse error: zoneinfo_parse_node failed for node %d",
+                        file_data.filename, node_id);
                     return -1;
                 }
             } else {
@@ -1894,13 +1908,15 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
                 zone_idx++;
             }
             if (!zoneinfo_parse_zone(&save_ptr, &node->zones[zone_idx])) {
-                ALOGE("%s parse error", file_data.filename);
+                ALOGE("%s parse error: zoneinfo_parse_zone failed for node %d zone %d (%s)",
+                    file_data.filename, node_id, zone_idx, zone_name);
                 return -1;
             }
         }
     }
     if (!node) {
-        ALOGE("%s parse error", file_data.filename);
+        ALOGE("%s parse error: no \"Node %%d, zone %%s\" line matched in %zu-byte read",
+            file_data.filename, strlen(buf));
         return -1;
     }
     node->zone_count = zone_idx + 1;
