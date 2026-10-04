@@ -1863,13 +1863,23 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
         int node_id;
         if (sscanf(line, "Node %d, zone %" STRINGIFY(LINE_MAX) "s", &node_id, zone_name) == 2) {
             if (!node || node->id != node_id) {
+                /*
+                 * per-node stats are only present in the first non-empty zone of
+                 * the node, on a kernel new enough to emit them at all (Linux
+                 * zoneinfo_show() added the "  per-node stats" section well after
+                 * this 3.4-class ARM kernel's mm/vmstat.c was written). Peek
+                 * non-destructively: if the marker is absent, rewind save_ptr so
+                 * the peeked line -- this zone's own first field, not a node
+                 * stats header -- is not dropped. Losing it left `node` NULL
+                 * through the rest of the file and zoneinfo_parse() failing
+                 * every time on every zone.
+                 */
+                char *save_ptr_before_peek = save_ptr;
                 line = strtok_r(NULL, "\n", &save_ptr);
-                if (strncmp(line, NODE_STATS_MARKER, strlen(NODE_STATS_MARKER)) != 0) {
-                    /*
-                     * per-node stats are only present in the first non-empty zone of
-                     * the node.
-                     */
-                    continue;
+                bool has_node_stats = line != NULL &&
+                    strncmp(line, NODE_STATS_MARKER, strlen(NODE_STATS_MARKER)) == 0;
+                if (!has_node_stats) {
+                    save_ptr = save_ptr_before_peek;
                 }
 
                 /* new node is found */
@@ -1885,7 +1895,7 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
                 node = &zi->nodes[node_idx];
                 node->id = node_id;
                 zone_idx = 0;
-                if (!zoneinfo_parse_node(&save_ptr, node)) {
+                if (has_node_stats && !zoneinfo_parse_node(&save_ptr, node)) {
                     ALOGE("%s parse error", file_data.filename);
                     return -1;
                 }
