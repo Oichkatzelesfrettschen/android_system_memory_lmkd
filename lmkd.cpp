@@ -1758,9 +1758,13 @@ static int zoneinfo_parse_zone(char **buf, struct zoneinfo_zone *zone) {
         int64_t val;
         int field_idx;
         enum field_match_result match_res;
+        char line_copy[LINE_MAX + 1];
+
+        strlcpy(line_copy, line, sizeof(line_copy));
 
         cp = strtok_r(line, " ", &save_ptr);
         if (!cp) {
+            ALOGE("zoneinfo_parse_zone: empty tokenizable line \"%s\"", line_copy);
             return false;
         }
 
@@ -1788,6 +1792,8 @@ static int zoneinfo_parse_zone(char **buf, struct zoneinfo_zone *zone) {
         match_res = match_field(cp, ap, zoneinfo_zone_field_names, ZI_ZONE_FIELD_COUNT,
             &val, &field_idx);
         if (match_res == PARSE_FAIL) {
+            ALOGE("zoneinfo_parse_zone: field \"%s\" value \"%s\" not numeric, line \"%s\"",
+                cp, ap, line_copy);
             return false;
         }
         if (match_res == PARSE_SUCCESS) {
@@ -1888,7 +1894,8 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
                     node_idx++;
                     if (node_idx == MAX_NR_NODES) {
                         /* max node count exceeded */
-                        ALOGE("%s parse error", file_data.filename);
+                        ALOGE("%s parse error: node count exceeds MAX_NR_NODES=%d at node %d",
+                            file_data.filename, MAX_NR_NODES, node_id);
                         return -1;
                     }
                 }
@@ -1896,7 +1903,8 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
                 node->id = node_id;
                 zone_idx = 0;
                 if (has_node_stats && !zoneinfo_parse_node(&save_ptr, node)) {
-                    ALOGE("%s parse error", file_data.filename);
+                    ALOGE("%s parse error: zoneinfo_parse_node failed for node %d",
+                        file_data.filename, node_id);
                     return -1;
                 }
             } else {
@@ -1904,13 +1912,15 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
                 zone_idx++;
             }
             if (!zoneinfo_parse_zone(&save_ptr, &node->zones[zone_idx])) {
-                ALOGE("%s parse error", file_data.filename);
+                ALOGE("%s parse error: zoneinfo_parse_zone failed for node %d zone %d (%s)",
+                    file_data.filename, node_id, zone_idx, zone_name);
                 return -1;
             }
         }
     }
     if (!node) {
-        ALOGE("%s parse error", file_data.filename);
+        ALOGE("%s parse error: no \"Node %%d, zone %%s\" line matched in %zu-byte read",
+            file_data.filename, strlen(buf));
         return -1;
     }
     node->zone_count = zone_idx + 1;
